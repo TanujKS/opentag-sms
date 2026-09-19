@@ -1,0 +1,43 @@
+/**
+ * Wrangler configuration for the iMessage <-> Slack relay Worker.
+ * https://developers.cloudflare.com/workers/wrangler/configuration/
+ *
+ * This file is committed, so it contains nothing that identifies a particular deployment.
+ * Every deployment-specific value lives on the Worker itself:
+ *
+ *   - Credentials are secrets (`secrets.required` below).
+ *   - The IDs are plain vars set once on the Worker, not here:
+ *       npx wrangler deploy --var ALLOWED_GROUP_ID:<id> --var SLACK_CHANNEL_ID:<id> ...
+ *     or dashboard -> Worker -> Settings -> Variables and Secrets. `keep_vars` makes later
+ *     `wrangler deploy` runs leave them in place (by default a deploy replaces all vars with the
+ *     ones declared here, i.e. it would delete them). Their types are declared in src/index.ts
+ *     (`RelayEnv`), because `wrangler types` only knows about this file.
+ *
+ *       ALLOWED_GROUP_ID       exact Sendblue group_id to mirror; unset = discovery mode,
+ *                              never "forward every chat"
+ *       SENDER_NAMES           optional JSON object, E.164 number -> display name shown in Slack
+ *       SLACK_CHANNEL_ID       the channel, used in both directions; unset = discovery mode
+ *       OPENTAG_SLACK_USER_ID  OpenTag's Slack *member* ID (U...), not its App ID (A...); the
+ *                              "@opentag" mention only works with the member ID. Unset = discovery
+ *       SENDBLUE_FROM_NUMBER   the Sendblue number that sits in the group, E.164; unset = discovery
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "opentag-sms-worker",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-09-16",
+	"observability": {
+		"enabled": true
+	},
+	"upload_source_maps": true,
+	"keep_vars": true,
+	"secrets": {
+		/**
+		 * Set with `npx wrangler secret put <NAME>`; locally via `.dev.vars` (see `.dev.vars.example`).
+		 * `wrangler deploy` fails if any is missing on the Worker.
+		 * SLACK_USER_TOKEN is the xoxp- User OAuth Token: relayed iMessages are posted as that user so
+		 * OpenTag treats them (and their @mentions) as human messages.
+		 */
+		"required": ["RELAY_TOKEN", "SLACK_SIGNING_SECRET", "SLACK_USER_TOKEN", "SENDBLUE_API_KEY_ID", "SENDBLUE_API_SECRET_KEY"]
+	}
+}

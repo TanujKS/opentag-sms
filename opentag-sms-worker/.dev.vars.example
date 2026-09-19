@@ -1,0 +1,27 @@
+# Copy to `.dev.vars` (gitignored) for `npm run dev`. Never commit real values.
+# Only the five secrets below are read from this file: wrangler loads exactly the keys listed under
+# `secrets.required` in wrangler.jsonc and ignores everything else.
+
+# Random 32-byte hex token that protects the Sendblue receive URL:
+#   POST /webhooks/sendblue/<RELAY_TOKEN>
+# Generate one with: openssl rand -hex 32
+RELAY_TOKEN="replace-with-openssl-rand-hex-32-output"
+
+# Slack app -> Basic Information -> App Credentials -> Signing Secret.
+# Verifies that POST /webhooks/slack/events really comes from Slack.
+SLACK_SIGNING_SECRET="replace-with-slack-signing-secret"
+
+# Slack app -> OAuth & Permissions -> User OAuth Token (xoxp-...).
+# Needs the *user* scopes chat:write, channels:history, groups:history.
+# Relayed iMessages are posted as this user (so OpenTag sees human messages, not bot ones),
+# and thread parents are read with it.
+SLACK_USER_TOKEN="xoxp-replace-me"
+
+# Sendblue dashboard -> API keys. Used to send into the iMessage group.
+SENDBLUE_API_KEY_ID="replace-with-sendblue-key-id"
+SENDBLUE_API_SECRET_KEY="replace-with-sendblue-secret"
+
+# The IDs (ALLOWED_GROUP_ID, SENDER_NAMES, SLACK_CHANNEL_ID, OPENTAG_SLACK_USER_ID,
+# SENDBLUE_FROM_NUMBER) are plain vars stored on the deployed Worker, not in the repo and not in
+# this file. For a local run pass them with --var, or omit them for discovery mode:
+#   npx wrangler dev --var ALLOWED_GROUP_ID:demo-group --var 'SENDER_NAMES:{"+15555550123":"Tanuj"}'
