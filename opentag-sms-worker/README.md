@@ -90,9 +90,10 @@ Each relayed post is also sent as a Block Kit `section` whose `block_id` is `sb:
 Slack retries any event not acknowledged within 3 seconds, so the Worker acknowledges first and then, via `waitUntil`:
 
 1. If the message is a thread reply (`thread_ts` present and different from `ts`), fetch the thread parent with `conversations.replies` and look for an `sb:` block id. Failures are logged as `thread_lookup_failed` and the message is still delivered, just not as an inline reply.
-2. Convert Slack markup to plain text: `<@U1|tanuj>` -> `@tanuj`, `<#C1|general>` -> `#general`, `<!here>` -> `@here`, `<https://x|label>` -> `label (https://x)`, `&amp;` -> `&`. If `text` is empty, the `rich_text` blocks are flattened instead.
-3. `POST https://api.sendblue.com/api/send-group-message` with `group_id`, `from_number`, `content`, and `reply_to: {message_handle}` when a parent handle was found. If Sendblue rejects the inline reply (HTTP 4xx, e.g. the line is not V2 or the target is gone), it is resent once as a plain group message (`reply_rejected` log).
-4. Log `{"event":"slack_relayed","slack_ts":...,"inline_reply":"true|false","message_handle":...}` or `{"event":"slack_relay_failed","slack_ts":...,"category":...}`.
+2. Lay the message out from its `blocks`, which is what Slack renders: each section, header, quote line and list item on its own line (`•` bullets, `1.` numbering, nested lists indented), newlines kept as they are. The event's `text` field is used only when the message has no blocks, because apps send it as a one-line notification fallback (OpenTag's arrives with newlines flattened to spaces and a stray `<br>`).
+3. Convert Slack markup to plain text: `<@U1|tanuj>` -> `@tanuj`, `<#C1|general>` -> `#general`, `<!here>` -> `@here`, `<https://x|label>` -> `label (https://x)`, `&amp;` -> `&`, literal `<br>` -> newline, `*bold*` / `_italic_` / `~strike~` / `` `code` `` markers dropped (only when they sit at word edges, so `a * b` and `snake_case` survive), and `:zap:` -> ⚡ via Slack's own shortcode table (`src/slack-emoji.json`). Unknown shortcodes such as custom workspace emoji stay as `:name:`.
+4. `POST https://api.sendblue.com/api/send-group-message` with `group_id`, `from_number`, `content`, and `reply_to: {message_handle}` when a parent handle was found. If Sendblue rejects the inline reply (HTTP 4xx, e.g. the line is not V2 or the target is gone), it is resent once as a plain group message (`reply_rejected` log).
+5. Log `{"event":"slack_relayed","slack_ts":...,"inline_reply":"true|false","message_handle":...}` or `{"event":"slack_relay_failed","slack_ts":...,"category":...}`.
 
 Logs never contain tokens, secrets, URLs, or message text in either direction.
 
@@ -275,7 +276,7 @@ Slack -> iMessage
 - [ ] OpenTag's thread reply under a relayed iMessage arrives in the group as an inline reply to that exact iMessage (`slack_relayed` with `"inline_reply":"true"`). If the tail shows `reply_rejected`, the Sendblue line does not support inline replies; the message still arrives as a normal message.
 - [ ] A top-level OpenTag message in the channel arrives in the group as a normal message.
 - [ ] A human's Slack message, and the relay's own posts, do not arrive in the group.
-- [ ] Slack markup in OpenTag's message (mentions, links, `&amp;`) reads as plain text in iMessage.
+- [ ] Slack markup in OpenTag's message (mentions, links, `&amp;`, `*bold*`, `<br>`, `:zap:`) reads as plain text with real emoji in iMessage.
 - [ ] `npx wrangler tail` shows no message text, tokens, or URLs.
 - [ ] Temporarily set `SLACK_USER_TOKEN` to an invalid value: the Worker returns 502 and logs `slack_failed` with `slack_invalid_auth`; restore it and confirm delivery returns to 200.
 
@@ -315,7 +316,7 @@ A `QUEUED`/`SENT` response with a `message_handle` (and the text showing up in t
 - Files OpenTag attaches in Slack are not relayed (Slack file URLs are private); text-only messages are. A file-only message is skipped.
 - Reply mapping is one-directional: OpenTag's thread reply -> iMessage inline reply. An iMessage inline reply to something OpenTag said is posted to Slack as a normal message, not in the thread. Relayed posts longer than 3000 characters carry no block id and cannot be replied to inline.
 - Inline replies require a V2 Sendblue line and an iMessage (not SMS) conversation; otherwise Sendblue returns 400 and the message is resent plain.
-- Slack markup is flattened (`*bold*` and `_italic_` markers are left as-is; user mentions without a label appear as `@U...`).
+- iMessage via Sendblue is plain text, so the layout (paragraphs, bullets, numbering, quotes) is reproduced but bold and italic are dropped rather than styled; user mentions without a label appear as `@U...`, and custom workspace emoji stay as `:name:`. The standard emoji table is a snapshot; `npm run emoji:update` refreshes it from emojibase when Slack adds new emoji.
 - Media links point at Sendblue-hosted files, not Slack file copies; their lifetime and access rules are Sendblue's.
 - Historical messages are not imported.
 - One group, one channel, one agent. Change the vars on the Worker (`wrangler deploy --var` or dashboard) to switch.
@@ -330,4 +331,5 @@ A `QUEUED`/`SENT` response with a `message_handle` (and the text showing up in t
 | `npm test`           | Run the vitest checks once                                |
 | `npm run typecheck`  | Type-check `src/` and `test/`                             |
 | `npm run cf-typegen` | Regenerate `worker-configuration.d.ts` after editing `secrets.required` |
+| `npm run emoji:update` | Regenerate `src/slack-emoji.json` (Slack shortcode -> emoji) from emojibase |
 | `npm run deploy`     | Deploy to Cloudflare                                      |

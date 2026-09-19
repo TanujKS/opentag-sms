@@ -8,7 +8,8 @@
     "start": "wrangler dev",
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc --noEmit -p test/tsconfig.json",
-    "cf-typegen": "wrangler types --strict-vars=false"
+    "cf-typegen": "wrangler types --strict-vars=false",
+    "emoji:update": "node scripts/emoji-table.mjs"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.0.0",

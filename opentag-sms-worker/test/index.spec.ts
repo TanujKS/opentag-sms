@@ -1,6 +1,7 @@
 import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import worker, {
+	blocksToPlainText,
 	buildSlackText,
 	extractRelayedHandle,
 	parseSenderNames,
@@ -740,7 +741,20 @@ describe('Slack events: relaying into the group', () => {
 				],
 			}),
 		);
-		expect(sendblueBody().content).toBe('Summary :tada: for @U0HUMAN\n- one\n- two');
+		expect(sendblueBody().content).toBe('Summary \u{1F389} for @U0HUMAN\n\u2022 one\n\u2022 two');
+	});
+
+	it('lays the message out from its blocks, not from the one-line text fallback apps send', async () => {
+		await sendSlack(
+			slackEvent({
+				text: "<br>  Edviro's positioning: - *Category*: platform - *Promise*: loop  Source: notion",
+				blocks: [
+					{ type: 'section', text: { type: 'mrkdwn', text: "Edviro's positioning:\n- *Category*: platform\n- *Promise*: loop :zap:" } },
+					{ type: 'context', elements: [{ type: 'mrkdwn', text: 'Source: <https://notion.so/x|notion>' }] },
+				],
+			}),
+		);
+		expect(sendblueBody().content).toBe("Edviro's positioning:\n- Category: platform\n- Promise: loop \u26A1\uFE0F\nSource: notion (https://notion.so/x)");
 	});
 
 	it('sends a thread reply as an iMessage inline reply when the parent is a relayed iMessage', async () => {
@@ -856,8 +870,70 @@ describe('slackMarkupToPlainText', () => {
 		expect(slackMarkupToPlainText('a &lt; b &amp;&amp; c &gt; d')).toBe('a < b && c > d');
 	});
 
-	it('leaves ordinary text and emoji untouched', () => {
-		expect(slackMarkupToPlainText('plain *bold* 🎉 line\nnext')).toBe('plain *bold* 🎉 line\nnext');
+	it('flattens <br> tags and bold/italic/strike/code markers into iMessage-friendly text', () => {
+		expect(
+			slackMarkupToPlainText(
+				'<br>  Short answer: *no Mac needed* — only for iMessage.<br><br>*The SMS path (what you want)*<br/>Twilio gives you `two` calls, _really_ ~three~.',
+			),
+		).toBe('Short answer: no Mac needed — only for iMessage.\n\nThe SMS path (what you want)\nTwilio gives you two calls, really three.');
+		expect(slackMarkupToPlainText('```\nconst a = 1;\n```\nafter')).toBe('const a = 1;\nafter');
+		expect(slackMarkupToPlainText('*bold _and italic_* &gt; quoted\n\n\n\nfar')).toBe('bold and italic > quoted\n\nfar');
+	});
+
+	it('leaves markers that are not at word edges alone', () => {
+		const untouched = 'a * b * c, 2*3*4, snake_case_name, __init__, ~/dir, https://x.example/a_b_c?x=*';
+		expect(slackMarkupToPlainText(untouched)).toBe(untouched);
+		expect(slackMarkupToPlainText('plain 🎉 line\nnext')).toBe('plain 🎉 line\nnext');
+	});
+
+	it('turns :shortcodes: into emoji, composes skin tones, and leaves unknown names and times alone', () => {
+		expect(slackMarkupToPlainText('Ship it :zap: :tada: :white_check_mark: :warning: :flag-us:')).toBe(
+			'Ship it \u26A1\uFE0F \u{1F389} \u2705\uFE0F \u26A0\uFE0F \u{1F1FA}\u{1F1F8}',
+		);
+		expect(slackMarkupToPlainText(':+1::skin-tone-2: :thumbsup:')).toBe('\u{1F44D}\u{1F3FB} \u{1F44D}\uFE0F');
+		expect(slackMarkupToPlainText('at 10:30:45 :custom_thing: done')).toBe('at 10:30:45 :custom_thing: done');
+	});
+});
+
+describe('blocksToPlainText', () => {
+	it('puts sections, list items, quotes, code and headers on their own lines like Slack does', () => {
+		const section = (text: string) => ({ type: 'rich_text_section', elements: [{ type: 'text', text }] });
+		const blocks = [
+			{ type: 'header', text: { type: 'plain_text', text: 'Plan' } },
+			{
+				type: 'rich_text',
+				elements: [
+					section('Steps:\n'),
+					{ type: 'rich_text_list', style: 'ordered', elements: [section('first'), section('second')] },
+					{ type: 'rich_text_list', style: 'bullet', indent: 1, elements: [section('nested')] },
+					{ type: 'rich_text_list', style: 'ordered', offset: 2, elements: [section('third')] },
+					section('\nThen:'),
+					{ type: 'rich_text_quote', elements: [{ type: 'text', text: 'quoted\nlines\n' }] },
+					{ type: 'rich_text_preformatted', elements: [{ type: 'text', text: 'code();' }] },
+					{
+						type: 'rich_text_section',
+						elements: [
+							{ type: 'text', text: 'Done ', style: { bold: true } },
+							{ type: 'emoji', name: '+1', unicode: '1f44d-1f3fc', skin_tone: 3 },
+							{ type: 'text', text: ' ' },
+							{ type: 'usergroup', usergroup_id: 'S1' },
+							{ type: 'text', text: ' ' },
+							{ type: 'date', timestamp: 1700000000, format: '{date}', fallback: 'Nov 14' },
+						],
+					},
+				],
+			},
+			{ type: 'divider' },
+		];
+		expect(blocksToPlainText(blocks)).toBe(
+			'Plan\nSteps:\n1. first\n2. second\n    \u2022 nested\n3. third\n\nThen:\n> quoted\n> lines\ncode();\nDone :+1::skin-tone-3: @group Nov 14',
+		);
+		expect(slackMarkupToPlainText(blocksToPlainText(blocks))).toContain('Done \u{1F44D}\u{1F3FC} @group Nov 14');
+	});
+
+	it('returns an empty string for missing or unknown blocks', () => {
+		expect(blocksToPlainText(undefined)).toBe('');
+		expect(blocksToPlainText([{ type: 'image', image_url: 'https://x.example/a.png' }])).toBe('');
 	});
 });
 
