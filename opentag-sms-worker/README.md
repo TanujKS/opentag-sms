@@ -82,7 +82,8 @@ Each relayed post is also sent as a Block Kit `section` whose `block_id` is `sb:
 | `url_verification`                                                                       | 200 `{"challenge": ...}` (Slack's one-time handshake when you save the Request URL)              |
 | Not a `message` event; subtype `message_changed`, `message_deleted`, joins, topic, hidden | 200, ignored                                                                                     |
 | Any of the four Slack-side vars empty (discovery mode)                                   | 200, log `{"event":"slack_discovery","channel":...,"user":...,"bot_id":...,...}`, nothing relayed |
-| Message in another channel, or from anyone but OpenTag (humans, this relay's own posts)  | 200, ignored                                                                                     |
+| Message in another channel                                                               | 200, ignored                                                                                     |
+| Message from anyone but OpenTag (humans, this relay's own posts)                         | 200, ignored, log `{"event":"slack_ignored_sender","user":...,"bot_id":...,"app_id":...}` (IDs only) |
 | OpenTag message without text (e.g. file only)                                            | 200, log `{"event":"slack_relay_skipped","category":"no_text"}`                                  |
 | OpenTag message                                                                          | 200 `Accepted` immediately; delivery continues in the background (see below)                     |
 
@@ -225,10 +226,12 @@ The deploy fails if any of the five secrets is missing, because `wrangler.jsonc`
 
 ### 4. Slack app: Event Subscriptions
 
-1. **Event Subscriptions** -> toggle **Enable Events** on.
-2. **Request URL**: paste `https://opentag-sms-worker.<your-subdomain>.workers.dev/webhooks/slack/events`. Slack immediately sends a signed `url_verification` and must show **Verified**. If it fails, check that `SLACK_SIGNING_SECRET` matches the app and that the Worker is deployed.
-3. **Subscribe to bot events** -> add `message.groups` (private channel) and `message.channels` (public channel). **Save Changes**.
-4. If Slack shows a banner asking to reinstall, do so (**Install App** -> **Reinstall**).
+1. **Socket Mode** (left nav, under Settings) -> **Enable Socket Mode** must be **off**. With it on, Slack delivers events over a WebSocket to an `xapp-` client and never POSTs to the Request URL, even though the URL still shows **Verified**. The tell is the grey notice under the Request URL field: "Socket Mode is enabled. You won't need to specify a Request URL."
+2. **Event Subscriptions** -> toggle **Enable Events** on.
+3. **Request URL**: paste `https://opentag-sms-worker.<your-subdomain>.workers.dev/webhooks/slack/events`, exactly that, no trailing slash (the Worker answers 404 to `/events/`). Slack immediately sends a signed `url_verification` and must show **Verified**. If it fails, check that `SLACK_SIGNING_SECRET` matches the app and that the Worker is deployed.
+4. **Subscribe to bot events** -> add `message.groups` (private channel) and `message.channels` (public channel). **Save Changes**; the page keeps edits pending until you do.
+5. If Slack shows a banner asking to reinstall, do so (**Install App** -> **Reinstall**).
+6. Confirm delivery before going further: with `npx wrangler tail --format pretty` running, post anything in the channel yourself. Every message must produce a `POST /webhooks/slack/events` line; once the IDs are set (step 5), your own posts additionally log `slack_ignored_sender`. See [Troubleshooting](#troubleshooting) if nothing arrives.
 
 ### 5. Discover the IDs, then lock the relay to them
 
@@ -275,6 +278,32 @@ Slack -> iMessage
 - [ ] Slack markup in OpenTag's message (mentions, links, `&amp;`) reads as plain text in iMessage.
 - [ ] `npx wrangler tail` shows no message text, tokens, or URLs.
 - [ ] Temporarily set `SLACK_USER_TOKEN` to an invalid value: the Worker returns 502 and logs `slack_failed` with `slack_invalid_auth`; restore it and confirm delivery returns to 200.
+
+## Troubleshooting
+
+### Slack -> iMessage: OpenTag's message never reaches the group
+
+Read `npx wrangler tail --format pretty` (or the Workers Observability logs) while it happens, and match the pattern:
+
+| What the tail shows                                                                                   | Meaning                                                                                                                                                                                                                      |
+| ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Only `POST /webhooks/sendblue/...` lines; no `POST /webhooks/slack/events` when the message is posted | Slack is not delivering events. In order of likelihood: **Socket Mode is on** (step 4.1, this one bit the first deployment: URL verified, zero events); the app's bot is not in the channel (`/invite @<app name>`); `message.groups` missing for a private channel; unsaved changes or a pending reinstall on the Event Subscriptions page. A single Slack request with no log line under it is just the `url_verification` handshake from saving the URL |
+| `POST /webhooks/slack/events` then `slack_ignored_sender` for OpenTag's message                        | Events arrive, but OpenTag posts under a different ID than `OPENTAG_SLACK_USER_ID`. Copy `user` (`U...`) from that log and `npx wrangler deploy --var OPENTAG_SLACK_USER_ID:U...`                                             |
+| `slack_discovery`                                                                                     | One of `SLACK_CHANNEL_ID`, `OPENTAG_SLACK_USER_ID`, `SENDBLUE_FROM_NUMBER`, `ALLOWED_GROUP_ID` is unset on the Worker; check **Settings -> Variables and Secrets** against step 5                                             |
+| `slack_relay_failed` with `category`                                                                  | The Worker did call Sendblue: `http_401` wrong API keys, `http_400`/`http_404` wrong `ALLOWED_GROUP_ID` or `SENDBLUE_FROM_NUMBER`, `http_403` plan without group sending, `timeout`/`network_error` Sendblue unreachable       |
+| `slack_relayed` but nothing in Messages                                                               | Sendblue accepted it; check the Sendblue dashboard message log for that `message_handle`                                                                                                                                     |
+
+To test Sendblue sending on its own, bypassing Slack and the Worker (this is the exact call the Worker makes):
+
+```bash
+curl -s -X POST https://api.sendblue.com/api/send-group-message \
+  -H "sb-api-key-id: $SENDBLUE_API_KEY_ID" \
+  -H "sb-api-secret-key: $SENDBLUE_API_SECRET_KEY" \
+  -H "content-type: application/json" \
+  -d '{"group_id":"<ALLOWED_GROUP_ID>","from_number":"<SENDBLUE_FROM_NUMBER>","content":"relay test from curl"}'
+```
+
+A `QUEUED`/`SENT` response with a `message_handle` (and the text showing up in the group, sent by the Sendblue number) proves the keys, group id and number; anything else points at the value named in the error.
 
 ## Limitations (accepted for the MVP)
 

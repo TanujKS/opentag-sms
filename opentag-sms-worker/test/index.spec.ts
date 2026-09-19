@@ -620,10 +620,15 @@ describe('Slack events: filtering', () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
-	it('ignores messages from anyone other than OpenTag, including the relay itself', async () => {
-		expect((await sendSlack(slackEvent({ user: 'U0HUMAN' }))).status).toBe(200);
+	it('ignores messages from anyone other than OpenTag, including the relay itself, logging only their IDs', async () => {
+		expect((await sendSlack(slackEvent({ user: 'U0HUMAN', text: 'private words' }))).status).toBe(200);
 		expect((await sendSlack(slackEvent({ user: undefined, bot_id: 'B0RELAY', subtype: 'bot_message' }))).status).toBe(200);
 		expect(fetchMock).not.toHaveBeenCalled();
+		expect(loggedEvents(logSpy).map((entry) => [entry.event, entry.user, entry.bot_id])).toEqual([
+			['slack_ignored_sender', 'U0HUMAN', ''],
+			['slack_ignored_sender', '', 'B0RELAY'],
+		]);
+		expect(allLogOutput()).not.toContain('private words');
 	});
 
 	it('accepts OpenTag identified by bot_id or app_id when configured that way', async () => {

@@ -304,7 +304,7 @@ async function handleSlackEvent(request: Request, env: RelayEnv, ctx: ExecutionC
 	const threadTs = asString(event.thread_ts);
 
 	// Discovery mode: until the channel, sender, group and sending number are all configured,
-	// log identifiers so they can be copied into wrangler.jsonc, and relay nothing.
+	// log identifiers so they can be set on the Worker, and relay nothing.
 	const config = slackRelayConfig(env);
 	if (config === null) {
 		log('info', { event: 'slack_discovery', channel, user, bot_id: botId, app_id: appId, subtype, ts, thread_ts: threadTs });
@@ -313,7 +313,11 @@ async function handleSlackEvent(request: Request, env: RelayEnv, ctx: ExecutionC
 
 	if (channel !== config.channelId) return ok('Ignored: other channel');
 	// Accept the member ID (U...), bot ID (B...) or app ID (A...); only the member ID also enables the mention.
-	if (user !== config.senderId && botId !== config.senderId && appId !== config.senderId) return ok('Ignored: other sender');
+	if (user !== config.senderId && botId !== config.senderId && appId !== config.senderId) {
+		// IDs only: lets `wrangler tail` show that events arrive and which ID OpenTag actually posts under.
+		log('info', { event: 'slack_ignored_sender', user, bot_id: botId, app_id: appId, subtype, ts });
+		return ok('Ignored: other sender');
+	}
 
 	const text = slackEventText(event);
 	if (text.length === 0) {
